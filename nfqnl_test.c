@@ -12,6 +12,7 @@
 #include <string>
 #include <fstream>
 #include <chrono>
+#include <memory>
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
@@ -19,6 +20,9 @@ using namespace std;
 
 vector<string> sites;
 char hostname[128];
+
+clock_t start_time, end_time, data_start_time, data_end_time;
+double diff, data_diff;
 
 void dump(unsigned char* buf, int size) 
 {
@@ -53,8 +57,6 @@ string check_host(unsigned char* buf)
 int binarySearch(const char* a) {
     string str_a(a);
 
-
-
     int left = 0;
     int right = sites.size() - 1;
 
@@ -67,15 +69,12 @@ int binarySearch(const char* a) {
         }
 
         if (sites[mid] < str_a) {
-			printf("\n\nIng sites = %s, host = %s\n\n", sites[mid].c_str(), str_a.c_str());
             left = mid + 1;
         } else {
-			printf("\n\nIng sites = %s, host = %s\n\n", sites[mid].c_str(), str_a.c_str());
             right = mid - 1;
         }
     }
 
-	printf("\n Fail \n");
     return -1; 
 }
 
@@ -141,15 +140,17 @@ static uint32_t print_pkt (struct nfq_data *tb)
     string want_host = check_host(data);
 
 	// printf("\n\n\n\n%s\n\n\n\n", want_host.c_str());
-
+	start_time = clock();
     if (binarySearch(want_host.c_str()) != -1) {
         printf("Blocked site: %s\n", want_host.c_str());
+		end_time = clock();
+		diff = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+		printf("Blocked Time - %f seconds\n\n\n", diff);
         return 4294967295;
     }
     else
 	{
-		printf("\n\n\n\nwant host = %s\n\n\n\n", want_host.c_str());
-
+		// printf("\n\n\n\nwant host = %s\n\n\n\n", want_host.c_str());
 		return id;
 	}
 	return id;
@@ -167,8 +168,24 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
+std::string getMemoryUsage(pid_t pid) {
+    std::string result;
+    std::string command = "top -b -n 1 -p " + std::to_string(pid) + " | grep " + std::to_string(pid);
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    char mem_buf[128];
+    while (fgets(mem_buf, sizeof(mem_buf), pipe.get()) != nullptr) {
+        result += mem_buf;
+    }
+    return result;
+}
+
 int main(int argc, char **argv)
 {
+	pid_t pid = getpid(); 
+
     struct nfq_handle *h;
     struct nfq_q_handle *qh;
     int fd;
@@ -182,6 +199,8 @@ int main(int argc, char **argv)
         return -1;
     }
 
+	std::string memoryUsageBefore = getMemoryUsage(pid);
+
 	FILE *fp = fopen(argv[1], "r");
 	if (!fp)
 	{
@@ -190,6 +209,8 @@ int main(int argc, char **argv)
 	}
 
 	char buffer[128];
+	data_start_time = clock();
+	
 	while (fgets(buffer, 128, fp))
 	{
 	    char* comma_position = strchr(buffer, ',');
@@ -199,17 +220,17 @@ int main(int argc, char **argv)
 	        sites.push_back(site); // 주소를 벡터에 추가
 	    }
 	}
+	data_end_time = clock();
+	data_diff = (double)(data_end_time - data_start_time) / CLOCKS_PER_SEC;
+	printf("Data Saving Time - %f seconds\n\n\n", data_diff);
+
 	fclose(fp);
 
     sort(sites.begin(), sites.end());
 
-	int count = 0;
-	for (const auto& site : sites) {
-	    cout << site << endl;
-	    count++;
-	    if (count >= 20) 
-	        break;
-	}
+	std::string memoryUsageAfter = getMemoryUsage(pid);
+
+	printf("Memory usage difference: %ld bytes\n", memoryUsageAfter.size() - memoryUsageBefore.size());
 
     printf("opening library handle\n");
     h = nfq_open();
